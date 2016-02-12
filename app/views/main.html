@@ -2,6 +2,7 @@
 	<navbar></navbar>
 	<ed-system-map></ed-system-map>
 	<system-info></system-info>
+	<color-selection></color-selection>
 	<footer></footer>
 	<script type="x-shader/x-vertex" id="vertexshader">
 			attribute vec4 aColorIndex;
@@ -36,9 +37,9 @@
 			varying float vActiveColorIndex;
 
 			void main() {
-				gl_FragColor = texture2D( colorPalette, vec2( vActiveColorIndex / 16.0, 0.1 ) );
-				gl_FragColor.a = texture2D( texture, gl_PointCoord ).a;
-				if (gl_FragColor.w < 0.9) discard;
+				gl_FragColor = texture2D( colorPalette, vec2( vActiveColorIndex / 15.95, 0.0 ) );
+				gl_FragColor.a *= texture2D( texture, gl_PointCoord ).a;
+				if (gl_FragColor.a < 0.1) discard;
 			}
 		</script>
 

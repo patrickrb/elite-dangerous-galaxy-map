@@ -19,6 +19,21 @@ system-info{
   opacity: .85;
 }
 
+color-selection{
+	z-index: 4;
+	position: absolute;
+	top: 52px;
+	left: 0;
+	width: 180px;
+	background-color: #222222;
+	opacity: 0.85;
+}
+color-selection ul {
+    margin-top: 10px;
+    margin-left: -20px;
+    list-style: none;
+}
+
 .systemInfoHeader{
   background-color: #555555;
   color:#ffffff;

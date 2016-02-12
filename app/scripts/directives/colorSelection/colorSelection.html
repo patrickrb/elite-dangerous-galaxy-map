@@ -1,0 +1,28 @@
+<!-- TODO: is there a better way to do this? -->
+<style ng-repeat="(ind, colorName) in colorNames track by $index">
+    md-checkbox.cb{{ind}} .md-icon {
+        background-color: {{colors[ind]}};
+    }
+</style>
+
+<div class="container-fluid">
+  <div class="row">
+    <div class="col-md-12" style="padding: 1px 1px 1px 1px;">
+      <div class="panel panel-default">
+        <!-- Default panel contents -->
+        <div class="panel-heading">Show Systems</div>
+
+        <!-- Table -->
+        <ul>
+			<div ng-repeat="(ind, colorName) in colorNames track by $index">
+				<li ng-show="colorName !== 'UNUSED'">
+					<md-checkbox ng-model="activeColors[ind]" ng-change="updateColorFlags(ind)" ng-class="{ 'cb{{ind}}' : true }">
+						{{colorName}}
+                    </md-checkbox>
+				</li>
+			</div>
+		</ul>
+      </div>
+    </div>
+  </div>
+</div>

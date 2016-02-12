@@ -1,5 +1,5 @@
 angular.module('edGalaxyMap')
-	.directive('navbar',function ($rootScope, $q, $uibModal, systemsService, userService, $cookieStore) {
+	.directive('navbar',function ($rootScope, $q, $uibModal, systemsService, userService, colorService, $cookieStore) {
 			return {
 				restrict: 'E',
 				templateUrl: 'scripts/directives/navbar/navbar.html',
@@ -9,6 +9,7 @@ angular.module('edGalaxyMap')
 						}
 
 						$scope.changeColoring = function(name) {
+							colorService.setColoringType(name);
 							$rootScope.$broadcast('systemColoring:update', name);
 						}
 
