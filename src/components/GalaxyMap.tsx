@@ -601,9 +601,6 @@ export function GalaxyMap() {
           loadSystemsIntoScene(testSystems);
         }
 
-        // Setup event listeners after systems are loaded
-        setupEventListeners();
-
         // Wait another frame before starting animation
         await new Promise(resolve => requestAnimationFrame(resolve));
         
@@ -677,6 +674,14 @@ export function GalaxyMap() {
       isInitializedRef.current = false;
     };
   }, []); // Remove problematic dependencies to stop re-initialization loop
+
+  // Separate effect to handle event listeners when systems change
+  useEffect(() => {
+    if (systems.length > 0 && rendererRef.current) {
+      const cleanup = setupEventListeners();
+      return cleanup;
+    }
+  }, [systems, setupEventListeners]);
 
   return (
     <div className="relative w-full h-full">
