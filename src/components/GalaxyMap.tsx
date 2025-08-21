@@ -109,7 +109,7 @@ export function GalaxyMap() {
     // Raycaster for mouse picking
     raycasterRef.current = new THREE.Raycaster();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (raycasterRef.current.params as any).Points = { threshold: 0.5 };
+    (raycasterRef.current.params as any).Points = { threshold: 50.0 }; // Increased threshold for better picking
 
     // Add selected system icon
     addSelectedSystemIcon();
@@ -424,27 +424,40 @@ export function GalaxyMap() {
   }, [systems, colorService]);
 
   const setupEventListeners = useCallback(() => {
-    if (!mountRef.current || !rendererRef.current) return;
+    console.log('setupEventListeners called');
+    if (!mountRef.current || !rendererRef.current) {
+      console.log('Missing mountRef or rendererRef');
+      return;
+    }
     
     // Get the canvas element to attach mouse events to
     const canvas = rendererRef.current.domElement;
+    console.log('Canvas found:', !!canvas);
 
     const handleMouseMove = (event: MouseEvent) => {
       // Update mouse coordinates for raycasting (same as legacy implementation)
       mouse.current.x = (event.clientX / window.innerWidth) * 2 - 1;
       mouse.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      console.log('Mouse move:', mouse.current.x, mouse.current.y);
     };
 
     const handleMouseClick = () => {
-      if (!particleSystemRef.current || !cameraRef.current || !raycasterRef.current) return;
+      console.log('Mouse click detected');
+      if (!particleSystemRef.current || !cameraRef.current || !raycasterRef.current) {
+        console.log('Missing refs for raycasting');
+        return;
+      }
 
+      console.log('Performing raycast with mouse:', mouse.current.x, mouse.current.y);
       raycasterRef.current.setFromCamera(mouse.current, cameraRef.current);
       const intersects = raycasterRef.current.intersectObject(particleSystemRef.current);
+      console.log('Intersects found:', intersects.length);
+      console.log('Total systems loaded:', systems.length);
 
       if (intersects.length > 0) {
         const intersect = intersects[0];
         const systemIndex = intersect.index;
-        if (systemIndex !== undefined && systems[systemIndex]) {
+        if (systemIndex !== undefined && systemIndex >= 0 && systemIndex < systems.length && systems[systemIndex]) {
           const system = systems[systemIndex];
           setSelectedSystem(system);
           setSystemInfoHidden(false);
@@ -454,18 +467,24 @@ export function GalaxyMap() {
       }
     };
 
+    console.log('Adding event listeners to canvas');
     canvas.addEventListener('mousemove', handleMouseMove);
     canvas.addEventListener('click', handleMouseClick);
     
     // Return cleanup function
     return () => {
+      console.log('Cleaning up event listeners');
       canvas.removeEventListener('mousemove', handleMouseMove);
       canvas.removeEventListener('click', handleMouseClick);
     };
   }, [systems]);
 
   const setTargetPosition = (system: System) => {
-    if (!targetCircleRef.current || !cameraRef.current) return;
+    console.log('setTargetPosition called for system:', system.name);
+    if (!targetCircleRef.current || !cameraRef.current) {
+      console.log('Missing targetCircleRef or cameraRef');
+      return;
+    }
 
     // Make target circle visible and position it at the system
     targetCircleRef.current.visible = true;
@@ -479,6 +498,7 @@ export function GalaxyMap() {
       popScale = Math.max(system.population / POP_SIZE_THRESHOLD, 1.0);
     }
     targetCircleRef.current.scale.set(popScale, popScale, popScale);
+    console.log('Target circle positioned and made visible');
   };
 
   const flyToSystem = (system: System) => {
@@ -553,7 +573,6 @@ export function GalaxyMap() {
 
     const currentMount = mountRef.current;
     let cleanupResize: (() => void) | undefined;
-    let cleanupEventListeners: (() => void) | undefined;
 
     const initializeGalaxy = async () => {
       try {
@@ -582,8 +601,8 @@ export function GalaxyMap() {
           loadSystemsIntoScene(testSystems);
         }
 
-        // Setup event listeners and store cleanup function
-        cleanupEventListeners = setupEventListeners();
+        // Setup event listeners after systems are loaded
+        setupEventListeners();
 
         // Wait another frame before starting animation
         await new Promise(resolve => requestAnimationFrame(resolve));
@@ -652,10 +671,6 @@ export function GalaxyMap() {
       // Call cleanup functions
       if (cleanupResize) {
         cleanupResize();
-      }
-      
-      if (cleanupEventListeners) {
-        cleanupEventListeners();
       }
       
       // Reset initialization flag
