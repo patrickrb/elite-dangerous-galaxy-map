@@ -27,6 +27,7 @@ export function GalaxyMap() {
   const controlsRef = useRef<OrbitControls | undefined>(undefined);
   const particleSystemRef = useRef<THREE.Points | undefined>(undefined);
   const selectedSystemIconRef = useRef<THREE.Sprite | undefined>(undefined);
+  const targetCircleRef = useRef<THREE.Object3D | undefined>(undefined);
   const raycasterRef = useRef<THREE.Raycaster | undefined>(undefined);
   const animationIdRef = useRef<number | null>(null);
   const isInitializedRef = useRef(false);
@@ -113,6 +114,9 @@ export function GalaxyMap() {
     // Add selected system icon
     addSelectedSystemIcon();
 
+    // Add target circle
+    addTargetCircle();
+
     // Add controls
     addControls();
 
@@ -181,6 +185,31 @@ export function GalaxyMap() {
     
     selectedSystemIconRef.current = sprite;
     sceneRef.current.add(sprite);
+  };
+
+  const addTargetCircle = () => {
+    if (!sceneRef.current) return;
+
+    // Create target circle similar to legacy implementation
+    const targetCircle = new THREE.Object3D();
+    const targetCircleGeo = new THREE.CircleGeometry(50, 64);
+    const targetLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+    
+    // Remove center vertex to create a ring (like legacy)
+    const positions = targetCircleGeo.attributes.position.array as Float32Array;
+    const newPositions = new Float32Array(positions.length - 3); // Remove first vertex (center)
+    newPositions.set(positions.slice(3));
+    
+    const ringGeometry = new THREE.BufferGeometry();
+    ringGeometry.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
+    
+    const ring = new THREE.Line(ringGeometry, targetLineMaterial);
+    targetCircle.add(ring);
+    targetCircle.visible = false;
+    targetCircle.name = 'targetCircle';
+    
+    targetCircleRef.current = targetCircle;
+    sceneRef.current.add(targetCircle);
   };
 
   // Generate realistic galactic coordinates similar to Elite Dangerous galaxy
@@ -395,10 +424,15 @@ export function GalaxyMap() {
   }, [systems, colorService]);
 
   const setupEventListeners = useCallback(() => {
-    if (!mountRef.current) return;
+    if (!mountRef.current || !rendererRef.current) return;
+    
+    // Get the canvas element to attach mouse events to
+    const canvas = rendererRef.current.domElement;
 
-    const handleMouseMove = () => {
-      // Mouse move logic could be added here
+    const handleMouseMove = (event: MouseEvent) => {
+      // Update mouse coordinates for raycasting (same as legacy implementation)
+      mouse.current.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
     };
 
     const handleMouseClick = () => {
@@ -414,14 +448,38 @@ export function GalaxyMap() {
           const system = systems[systemIndex];
           setSelectedSystem(system);
           setSystemInfoHidden(false);
+          setTargetPosition(system);
           flyToSystem(system);
         }
       }
     };
 
-    mountRef.current.addEventListener('mousemove', handleMouseMove);
-    mountRef.current.addEventListener('click', handleMouseClick);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('click', handleMouseClick);
+    
+    // Return cleanup function
+    return () => {
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('click', handleMouseClick);
+    };
   }, [systems]);
+
+  const setTargetPosition = (system: System) => {
+    if (!targetCircleRef.current || !cameraRef.current) return;
+
+    // Make target circle visible and position it at the system
+    targetCircleRef.current.visible = true;
+    targetCircleRef.current.position.set(system.x, system.y, system.z);
+    targetCircleRef.current.lookAt(cameraRef.current.position);
+    
+    // Scale based on population like legacy implementation  
+    const POP_SIZE_THRESHOLD = 1000000000;
+    let popScale = 1.0;
+    if (system.population) {
+      popScale = Math.max(system.population / POP_SIZE_THRESHOLD, 1.0);
+    }
+    targetCircleRef.current.scale.set(popScale, popScale, popScale);
+  };
 
   const flyToSystem = (system: System) => {
     if (!cameraRef.current || !controlsRef.current || !selectedSystemIconRef.current) return;
@@ -495,6 +553,7 @@ export function GalaxyMap() {
 
     const currentMount = mountRef.current;
     let cleanupResize: (() => void) | undefined;
+    let cleanupEventListeners: (() => void) | undefined;
 
     const initializeGalaxy = async () => {
       try {
@@ -523,8 +582,8 @@ export function GalaxyMap() {
           loadSystemsIntoScene(testSystems);
         }
 
-        // Setup event listeners
-        setupEventListeners();
+        // Setup event listeners and store cleanup function
+        cleanupEventListeners = setupEventListeners();
 
         // Wait another frame before starting animation
         await new Promise(resolve => requestAnimationFrame(resolve));
@@ -560,6 +619,12 @@ export function GalaxyMap() {
         rendererRef.current = undefined;
       }
       
+      // Cleanup target circle before disposing scene
+      if (targetCircleRef.current && sceneRef.current) {
+        sceneRef.current.remove(targetCircleRef.current);
+        targetCircleRef.current = undefined;
+      }
+      
       // Dispose of scene objects
       if (sceneRef.current) {
         sceneRef.current.clear();
@@ -584,9 +649,13 @@ export function GalaxyMap() {
         controlsRef.current = undefined;
       }
       
-      // Call resize cleanup
+      // Call cleanup functions
       if (cleanupResize) {
         cleanupResize();
+      }
+      
+      if (cleanupEventListeners) {
+        cleanupEventListeners();
       }
       
       // Reset initialization flag
