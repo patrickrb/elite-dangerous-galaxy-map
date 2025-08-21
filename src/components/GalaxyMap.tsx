@@ -37,15 +37,19 @@ export function GalaxyMap() {
   const [isLoading, setIsLoading] = useState(true);
   const [systemInfoHidden, setSystemInfoHidden] = useState(true);
   const [colorSelectionHidden, setColorSelectionHidden] = useState(false);
+  const [activeColoring, setActiveColoring] = useState(0); // 0=economy, 1=allegiance, 2=government
 
   const mouse = useRef(new THREE.Vector2());
 
-  // Color mapping data (simplified version from original)
+  // Color mapping data (exact match to legacy)
   const colorService = useMemo(() => ({
-    mapEconomy: ['Industrial', 'Agriculture', 'Extraction', 'Refinery', 'Service', 'Tourism', 'Military', 'High Tech'],
-    mapAllegiance: ['Federation', 'Empire', 'Alliance', 'Independent', 'Thargoid', 'Guardian'],
-    mapGovernment: ['Democracy', 'Corporate', 'Dictatorship', 'Communist', 'Feudal', 'Cooperative', 'Confederacy', 'Patronage'],
-    mapColorTypes: ['economy', 'allegiance', 'government']
+    colorPalette: ['#666666', '#fe0000', '#ff7f00', '#ffff00', '#bfff00', '#7fff00', '#00ff15', '#009901', '#00ff80', '#01ffff', '#337eff', '#0145ff', '#6601e5', '#e600e6'],
+    mapEconomy: ['None', 'Extraction', 'Refinery', 'Industrial', 'UNUSED', 'Agriculture', 'UNUSED', 'Terraforming', 'UNUSED', 'High Tech', 'Colony', 'Service', 'Tourism', 'Military'],
+    mapAllegiance: ['None', 'Federation', 'UNUSED', 'Independent', 'UNUSED', 'UNUSED', 'Alliance', 'UNUSED', 'UNUSED', 'Empire', 'UNUSED', 'UNUSED', 'UNUSED', 'UNUSED'],
+    mapGovernment: ['None', 'Confederacy', 'Prison Colony', 'Anarchy', 'Colony', 'Democracy', 'Imperial', 'Corporate', 'Communism', 'Feudal', 'Dictatorship', 'Theocracy', 'Cooperative', 'Patronage'],
+    mapColorTypes: ['economy', 'allegiance', 'government'],
+    activeColorType: 'economy',
+    activeColors: [true, true, true, true, true, true, true, true, true, true, true, true, true, true]
   }), []);
 
   const initThreeJS = useCallback(() => {
@@ -233,7 +237,7 @@ export function GalaxyMap() {
 
     setIsLoading(false);
 
-    // Create texture for points
+    // Create texture for points (circle texture like legacy)
     const canvas = document.createElement('canvas');
     canvas.width = 64;
     canvas.height = 64;
@@ -248,11 +252,11 @@ export function GalaxyMap() {
 
     const texture = new THREE.CanvasTexture(canvas);
 
-    // Create shader material - updated scale for larger galaxy
+    // Create simple shader material that works (temporarily simplified)
     const material = new THREE.ShaderMaterial({
       uniforms: {
         pointTexture: { value: texture },
-        scale: { value: 100.0 }  // Increased scale factor for larger coordinate system
+        scale: { value: 100.0 }
       },
       vertexShader: `
         attribute float size;
@@ -295,15 +299,33 @@ export function GalaxyMap() {
       positions[i * 3 + 1] = system.y;
       positions[i * 3 + 2] = system.z;
 
-      // Color based on economy (simplified)
-      const economyIndex = colorService.mapEconomy.indexOf(system.primary_economy || 'Industrial');
-      const hue = (economyIndex / colorService.mapEconomy.length) * 360;
-      const color = new THREE.Color(`hsl(${hue}, 70%, 60%)`);
+      // Color based on active coloring type using legacy color service
+      let colorProperty = '';
+      let colorArray: string[] = [];
+      
+      if (activeColoring === 0) {
+        colorProperty = system.primary_economy || 'None';
+        colorArray = colorService.mapEconomy;
+      } else if (activeColoring === 1) {
+        colorProperty = system.allegiance || 'None'; 
+        colorArray = colorService.mapAllegiance;
+      } else if (activeColoring === 2) {
+        colorProperty = system.government || 'None';
+        colorArray = colorService.mapGovernment;
+      }
+      
+      // Get color index and map to legacy color palette
+      const colorIndex = colorArray.indexOf(colorProperty);
+      const clampedIndex = Math.max(0, Math.min(colorIndex, colorService.colorPalette.length - 1));
+      const hexColor = colorService.colorPalette[clampedIndex];
+      
+      // Convert hex to RGB
+      const color = new THREE.Color(hexColor);
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;
 
-      // Size based on population - using legacy formula
+      // Size based on population - using exact legacy formula
       const BASE_POINT_SIZE = 100;
       const POP_SIZE_THRESHOLD = 1000000000; // 1 billion
       let size;
@@ -323,7 +345,21 @@ export function GalaxyMap() {
     const particleSystem = new THREE.Points(geometry, material);
     particleSystemRef.current = particleSystem;
     sceneRef.current.add(particleSystem);
-  }, [colorService]);
+  }, [colorService, activeColoring]);
+
+  // Function to update active coloring type
+  const updateActiveColoring = useCallback((colorType: string) => {
+    let newActiveColoring = 0;
+    if (colorType === 'allegiance') newActiveColoring = 1;
+    else if (colorType === 'government') newActiveColoring = 2;
+    
+    setActiveColoring(newActiveColoring);
+    
+    // Reload systems to update colors
+    if (systems.length > 0) {
+      loadSystemsIntoScene(systems);
+    }
+  }, [systems, loadSystemsIntoScene]);
 
   const loadSystemsData = useCallback(async () => {
     try {
@@ -528,7 +564,7 @@ export function GalaxyMap() {
       // Reset initialization flag
       isInitializedRef.current = false;
     };
-  }, []); // Empty dependency array to run only once
+  }, [initThreeJS, loadSystemsData, setupEventListeners]); // Added dependencies to fix React hooks warning
 
   return (
     <div className="relative w-full h-full">
@@ -540,8 +576,7 @@ export function GalaxyMap() {
         <ColorSelection
           onClose={() => setColorSelectionHidden(true)}
           onColorChange={(colorType) => {
-            // Handle color change
-            console.log('Color changed to:', colorType);
+            updateActiveColoring(colorType);
           }}
         />
       )}
