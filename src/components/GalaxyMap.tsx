@@ -51,8 +51,6 @@ export function GalaxyMap() {
   const initThreeJS = useCallback(() => {
     if (!mountRef.current || isInitializedRef.current) return;
 
-    console.log('Initializing Three.js...', { mountCurrent: !!mountRef.current, isInitialized: isInitializedRef.current });
-
     // Scene
     const scene = new THREE.Scene();
     sceneRef.current = scene;
@@ -74,9 +72,6 @@ export function GalaxyMap() {
       powerPreference: 'default',
       failIfMajorPerformanceCaveat: false
     });
-    
-    console.log('WebGL renderer created:', { renderer: !!renderer, context: !!renderer.getContext() });
-    
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.sortObjects = true;
     rendererRef.current = renderer;
@@ -105,7 +100,6 @@ export function GalaxyMap() {
 
     // Add renderer to DOM
     mountRef.current.appendChild(renderer.domElement);
-    console.log('Canvas added to DOM');
 
     // Raycaster for mouse picking
     raycasterRef.current = new THREE.Raycaster();
@@ -131,7 +125,6 @@ export function GalaxyMap() {
     
     // Mark as initialized
     isInitializedRef.current = true;
-    console.log('Three.js initialization complete');
     
     // Return cleanup function for resize listener
     return () => {
@@ -203,21 +196,9 @@ export function GalaxyMap() {
     return systems;
   }, [colorService]);
 
-  // Legacy system constants for size calculation
-  const BASE_POINT_SIZE = 100;
-  const POP_SIZE_THRESHOLD = 1000000000; // 1 billion - same as legacy
-
-  const getPopulationScaleForSystem = useCallback((system: System) => {
-    if (system.population) {
-      return 50 * Math.max(system.population / POP_SIZE_THRESHOLD, 1.0);
-    }
-    return BASE_POINT_SIZE;
-  }, []);
-
   const loadSystemsIntoScene = useCallback((systemsData: System[]) => {
     if (!sceneRef.current) return;
 
-    console.log('Loading systems into scene:', systemsData.length);
     setIsLoading(false);
 
     // Create texture for points
@@ -235,11 +216,11 @@ export function GalaxyMap() {
 
     const texture = new THREE.CanvasTexture(canvas);
 
-    // Create shader material with legacy-compatible scaling
+    // Create shader material
     const material = new THREE.ShaderMaterial({
       uniforms: {
         pointTexture: { value: texture },
-        scale: { value: 1.0 }
+        scale: { value: 300.0 }
       },
       vertexShader: `
         attribute float size;
@@ -291,11 +272,16 @@ export function GalaxyMap() {
       colors[i * 3 + 2] = color.b;
 
       // Size based on population - using legacy formula
-      sizes[i] = getPopulationScaleForSystem(system);
+      const BASE_POINT_SIZE = 100;
+      const POP_SIZE_THRESHOLD = 1000000000; // 1 billion
+      let size;
+      if (system.population) {
+        size = 50 * Math.max(system.population / POP_SIZE_THRESHOLD, 1.0);
+      } else {
+        size = BASE_POINT_SIZE;
+      }
+      sizes[i] = size;
     }
-
-    console.log('Sample system sizes:', sizes.slice(0, 10));
-    console.log('Sample system positions:', positions.slice(0, 9));
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('customColor', new THREE.BufferAttribute(colors, 3));
@@ -305,18 +291,14 @@ export function GalaxyMap() {
     const particleSystem = new THREE.Points(geometry, material);
     particleSystemRef.current = particleSystem;
     sceneRef.current.add(particleSystem);
-    
-    console.log('Particle system created and added to scene');
-  }, [colorService, getPopulationScaleForSystem]);
+  }, [colorService]);
 
   const loadSystemsData = useCallback(async () => {
-    console.log('Loading systems data...');
     try {
       // Load systems from API
       const response = await fetch('/api/systems');
       const systemsData = await response.json();
       
-      console.log('Systems loaded from API:', systemsData.length);
       setSystems(systemsData);
       
       if (systemsData.length > 0) {
@@ -327,44 +309,10 @@ export function GalaxyMap() {
       
       // For demo purposes, create some test data
       const testSystems = createTestSystems();
-      console.log('Using test systems:', testSystems.length);
       setSystems(testSystems);
       loadSystemsIntoScene(testSystems);
     }
   }, [createTestSystems, loadSystemsIntoScene]);
-
-  const flyToSystem = useCallback((system: System) => {
-    if (!cameraRef.current || !controlsRef.current || !selectedSystemIconRef.current) return;
-
-    // Position the icon and scale it based on population like legacy system
-    selectedSystemIconRef.current.position.set(system.x, system.y + 0.75, system.z);
-    selectedSystemIconRef.current.visible = true;
-    
-    // Scale the icon based on population using the same scale as the system points
-    const popScale = getPopulationScaleForSystem(system);
-    const scaleFactor = popScale / BASE_POINT_SIZE; // Normalize to base scale
-    selectedSystemIconRef.current.scale.set(
-      0.33 * scaleFactor, 
-      0.66 * scaleFactor, 
-      0.33 * scaleFactor
-    );
-
-    // Animate camera to system
-    const targetPosition = new THREE.Vector3(system.x, system.y, system.z + 5);
-    const targetLookAt = new THREE.Vector3(system.x, system.y, system.z);
-
-    // Simple animation (could be enhanced with TWEEN.js)
-    const animateCamera = () => {
-      cameraRef.current!.position.lerp(targetPosition, 0.05);
-      controlsRef.current!.target.lerp(targetLookAt, 0.05);
-      
-      if (cameraRef.current!.position.distanceTo(targetPosition) > 0.1) {
-        requestAnimationFrame(animateCamera);
-      }
-    };
-    
-    animateCamera();
-  }, [getPopulationScaleForSystem]);
 
   const setupEventListeners = useCallback(() => {
     if (!mountRef.current) return;
@@ -393,7 +341,31 @@ export function GalaxyMap() {
 
     mountRef.current.addEventListener('mousemove', handleMouseMove);
     mountRef.current.addEventListener('click', handleMouseClick);
-  }, [systems, flyToSystem]);
+  }, [systems]);
+
+  const flyToSystem = (system: System) => {
+    if (!cameraRef.current || !controlsRef.current || !selectedSystemIconRef.current) return;
+
+    // Position the icon
+    selectedSystemIconRef.current.position.set(system.x, system.y + 0.75, system.z);
+    selectedSystemIconRef.current.visible = true;
+
+    // Animate camera to system
+    const targetPosition = new THREE.Vector3(system.x, system.y, system.z + 5);
+    const targetLookAt = new THREE.Vector3(system.x, system.y, system.z);
+
+    // Simple animation (could be enhanced with TWEEN.js)
+    const animateCamera = () => {
+      cameraRef.current!.position.lerp(targetPosition, 0.05);
+      controlsRef.current!.target.lerp(targetLookAt, 0.05);
+      
+      if (cameraRef.current!.position.distanceTo(targetPosition) > 0.1) {
+        requestAnimationFrame(animateCamera);
+      }
+    };
+    
+    animateCamera();
+  };
 
   const animate = useCallback(() => {
     // Check if WebGL context is still valid before continuing
@@ -409,25 +381,15 @@ export function GalaxyMap() {
       controlsRef.current.update();
     }
 
-    // Update selected system icon scale based on distance and population
-    if (selectedSystemIconRef.current && cameraRef.current && selectedSystemIconRef.current.visible && selectedSystem) {
+    // Update selected system icon scale based on distance
+    if (selectedSystemIconRef.current && cameraRef.current && selectedSystemIconRef.current.visible) {
       const distance = selectedSystemIconRef.current.position.distanceTo(cameraRef.current.position);
-      const distanceScale = Math.max(Math.min(distance * 0.1, 10), 1);
-      
-      // Get population-based scale and combine with distance scale
-      const popScale = getPopulationScaleForSystem(selectedSystem);
-      const popScaleFactor = popScale / BASE_POINT_SIZE;
-      const combinedScale = distanceScale * popScaleFactor;
-      
-      selectedSystemIconRef.current.scale.set(
-        0.33 * combinedScale, 
-        0.66 * combinedScale, 
-        0.33 * combinedScale
-      );
+      const scale = Math.max(Math.min(distance * 0.1, 10), 1);
+      selectedSystemIconRef.current.scale.set(0.33 * scale, 0.66 * scale, 0.33 * scale);
     }
 
     render();
-  }, [selectedSystem, getPopulationScaleForSystem]);
+  }, []);
 
   // Store animate function in ref for context restored handler
   useEffect(() => {
@@ -444,8 +406,6 @@ export function GalaxyMap() {
         } catch (error) {
           console.error('Render error:', error);
         }
-      } else {
-        console.warn('Skipping render - WebGL context lost or invalid');
       }
     }
   };
@@ -458,8 +418,6 @@ export function GalaxyMap() {
 
     const initializeGalaxy = async () => {
       try {
-        console.log('Starting galaxy initialization...');
-        
         // Initialize Three.js scene first
         cleanupResize = initThreeJS();
         
@@ -477,7 +435,6 @@ export function GalaxyMap() {
         
         // Start animation loop only after everything is ready
         if (isInitializedRef.current && !animationIdRef.current && animateRef.current) {
-          console.log('Starting animation loop...');
           animateRef.current();
         }
       } catch (error) {
@@ -490,8 +447,6 @@ export function GalaxyMap() {
 
     // Cleanup
     return () => {
-      console.log('Cleaning up galaxy component...');
-      
       // Stop animation
       if (animationIdRef.current) {
         cancelAnimationFrame(animationIdRef.current);
@@ -541,7 +496,7 @@ export function GalaxyMap() {
       // Reset initialization flag
       isInitializedRef.current = false;
     };
-  }, []); // Intentionally empty dependency array to run only once
+  }, []); // Empty dependency array to run only once
 
   return (
     <div className="relative w-full h-full">
