@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { SystemInfo } from './SystemInfo';
@@ -19,13 +19,6 @@ interface System {
   government?: string;
 }
 
-interface Station {
-  id: number;
-  name: string;
-  system_id: number;
-  type: string;
-}
-
 export function GalaxyMap() {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | undefined>(undefined);
@@ -35,6 +28,9 @@ export function GalaxyMap() {
   const particleSystemRef = useRef<THREE.Points | undefined>(undefined);
   const selectedSystemIconRef = useRef<THREE.Sprite | undefined>(undefined);
   const raycasterRef = useRef<THREE.Raycaster | undefined>(undefined);
+  const animationIdRef = useRef<number | null>(null);
+  const isInitializedRef = useRef(false);
+  const animateRef = useRef<(() => void) | null>(null);
 
   const [systems, setSystems] = useState<System[]>([]);
   const [selectedSystem, setSelectedSystem] = useState<System | null>(null);
@@ -45,15 +41,15 @@ export function GalaxyMap() {
   const mouse = useRef(new THREE.Vector2());
 
   // Color mapping data (simplified version from original)
-  const colorService = {
+  const colorService = useMemo(() => ({
     mapEconomy: ['Industrial', 'Agriculture', 'Extraction', 'Refinery', 'Service', 'Tourism', 'Military', 'High Tech'],
     mapAllegiance: ['Federation', 'Empire', 'Alliance', 'Independent', 'Thargoid', 'Guardian'],
     mapGovernment: ['Democracy', 'Corporate', 'Dictatorship', 'Communist', 'Feudal', 'Cooperative', 'Confederacy', 'Patronage'],
     mapColorTypes: ['economy', 'allegiance', 'government']
-  };
+  }), []);
 
   const initThreeJS = useCallback(() => {
-    if (!mountRef.current) return;
+    if (!mountRef.current || isInitializedRef.current) return;
 
     // Scene
     const scene = new THREE.Scene();
@@ -69,11 +65,38 @@ export function GalaxyMap() {
     camera.position.set(0, 50, 50);
     cameraRef.current = camera;
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Renderer with context loss protection
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true,
+      preserveDrawingBuffer: false,
+      powerPreference: 'default',
+      failIfMajorPerformanceCaveat: false
+    });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.sortObjects = true;
     rendererRef.current = renderer;
+
+    // Add WebGL context loss/restore handlers
+    const canvas = renderer.domElement;
+    
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      console.warn('WebGL context lost, stopping animation');
+      if (animationIdRef.current) {
+        cancelAnimationFrame(animationIdRef.current);
+        animationIdRef.current = null;
+      }
+    };
+
+    const handleContextRestored = () => {
+      console.log('WebGL context restored, resuming animation');
+      if (!animationIdRef.current && animateRef.current) {
+        animateRef.current();
+      }
+    };
+
+    canvas.addEventListener('webglcontextlost', handleContextLost, false);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored, false);
 
     // Add renderer to DOM
     mountRef.current.appendChild(renderer.domElement);
@@ -99,6 +122,16 @@ export function GalaxyMap() {
     };
 
     window.addEventListener('resize', handleResize);
+    
+    // Mark as initialized
+    isInitializedRef.current = true;
+    
+    // Return cleanup function for resize listener
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      canvas.removeEventListener('webglcontextlost', handleContextLost);
+      canvas.removeEventListener('webglcontextrestored', handleContextRestored);
+    };
   }, []);
 
   const addControls = () => {
@@ -328,7 +361,14 @@ export function GalaxyMap() {
   };
 
   const animate = useCallback(() => {
-    requestAnimationFrame(animate);
+    // Check if WebGL context is still valid before continuing
+    if (!rendererRef.current || !rendererRef.current.getContext() || rendererRef.current.getContext().isContextLost()) {
+      console.warn('WebGL context lost, stopping animation');
+      animationIdRef.current = null;
+      return;
+    }
+
+    animationIdRef.current = requestAnimationFrame(animate);
 
     if (controlsRef.current) {
       controlsRef.current.update();
@@ -344,36 +384,112 @@ export function GalaxyMap() {
     render();
   }, []);
 
+  // Store animate function in ref for context restored handler
+  useEffect(() => {
+    animateRef.current = animate;
+  }, [animate]);
+
   const render = () => {
     if (rendererRef.current && sceneRef.current && cameraRef.current) {
-      rendererRef.current.render(sceneRef.current, cameraRef.current);
+      // Check WebGL context validity before rendering
+      const gl = rendererRef.current.getContext();
+      if (gl && !gl.isContextLost()) {
+        try {
+          rendererRef.current.render(sceneRef.current, cameraRef.current);
+        } catch (error) {
+          console.error('Render error:', error);
+        }
+      }
     }
   };
 
   useEffect(() => {
-    if (!mountRef.current) return;
+    if (!mountRef.current || isInitializedRef.current) return;
 
     const currentMount = mountRef.current;
+    let cleanupResize: (() => void) | undefined;
 
-    // Initialize Three.js scene
-    initThreeJS();
-    
-    // Load systems data
-    loadSystemsData();
+    const initializeGalaxy = async () => {
+      try {
+        // Initialize Three.js scene first
+        cleanupResize = initThreeJS();
+        
+        // Wait a frame to ensure WebGL context is ready
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        
+        // Load systems data
+        await loadSystemsData();
 
-    // Setup event listeners
-    setupEventListeners();
+        // Setup event listeners
+        setupEventListeners();
 
-    // Start animation loop
-    animate();
+        // Wait another frame before starting animation
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        
+        // Start animation loop only after everything is ready
+        if (isInitializedRef.current && !animationIdRef.current && animateRef.current) {
+          animateRef.current();
+        }
+      } catch (error) {
+        console.error('Galaxy initialization error:', error);
+        setIsLoading(false);
+      }
+    };
+
+    initializeGalaxy();
 
     // Cleanup
     return () => {
-      if (rendererRef.current && currentMount) {
-        currentMount.removeChild(rendererRef.current.domElement);
+      // Stop animation
+      if (animationIdRef.current) {
+        cancelAnimationFrame(animationIdRef.current);
+        animationIdRef.current = null;
       }
+      
+      // Cleanup Three.js resources
+      if (rendererRef.current) {
+        if (currentMount && currentMount.contains(rendererRef.current.domElement)) {
+          currentMount.removeChild(rendererRef.current.domElement);
+        }
+        
+        // Dispose of renderer
+        rendererRef.current.dispose();
+        rendererRef.current = undefined;
+      }
+      
+      // Dispose of scene objects
+      if (sceneRef.current) {
+        sceneRef.current.clear();
+        sceneRef.current = undefined;
+      }
+      
+      // Dispose of particle system
+      if (particleSystemRef.current) {
+        if (particleSystemRef.current.geometry) {
+          particleSystemRef.current.geometry.dispose();
+        }
+        if (particleSystemRef.current.material) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (particleSystemRef.current.material as any).dispose();
+        }
+        particleSystemRef.current = undefined;
+      }
+      
+      // Cleanup controls
+      if (controlsRef.current) {
+        controlsRef.current.dispose();
+        controlsRef.current = undefined;
+      }
+      
+      // Call resize cleanup
+      if (cleanupResize) {
+        cleanupResize();
+      }
+      
+      // Reset initialization flag
+      isInitializedRef.current = false;
     };
-  }, [initThreeJS, loadSystemsData, setupEventListeners, animate]);
+  }, []); // Empty dependency array to run only once
 
   return (
     <div className="relative w-full h-full">
