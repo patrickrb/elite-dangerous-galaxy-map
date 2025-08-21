@@ -1,58 +1,83 @@
 import { NextResponse } from 'next/server';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
-// Generate realistic galactic coordinates similar to Elite Dangerous galaxy
-function generateGalacticCoordinates() {
-  // Generate coordinates that follow a more realistic galactic distribution
-  // Most systems are concentrated near the galactic center with some scattered throughout
+// Define types for system data
+interface RawSystemData {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  population?: number | null;
+  primary_economy?: string | null;
+  allegiance?: string | null;
+  government?: string | null;
+  faction?: string | null;
+  state?: string | null;
+  security?: string | null;
+  power?: string | null;
+  power_state?: string | null;
+  needs_permit?: number;
+  updated_at?: number;
+  simbad_ref?: string | null;
+}
+
+interface SystemData {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  population: number;
+  primary_economy: string;
+  allegiance: string;
+  government: string;
+}
+
+// Cache for systems data to avoid reading file on every request
+let cachedSystems: SystemData[] | null = null;
+
+function loadSystemsData(): SystemData[] {
+  if (cachedSystems) {
+    return cachedSystems;
+  }
   
-  const random = Math.random();
-  
-  if (random < 0.6) {
-    // 60% of systems in the core bubble (similar to inhabited space in Elite)
-    return {
-      x: (Math.random() - 0.5) * 400 + (Math.random() - 0.5) * 50, // -225 to 225 with center bias
-      y: (Math.random() - 0.5) * 200 + (Math.random() - 0.5) * 30, // -115 to 115 with center bias  
-      z: (Math.random() - 0.5) * 300 + (Math.random() - 0.5) * 40  // -170 to 170 with center bias
-    };
-  } else if (random < 0.85) {
-    // 25% in the extended region (further from center)
-    return {
-      x: (Math.random() - 0.5) * 2000,  // -1000 to 1000
-      y: (Math.random() - 0.5) * 1000,  // -500 to 500
-      z: (Math.random() - 0.5) * 1500   // -750 to 750
-    };
-  } else {
-    // 15% in the far reaches (matching some of the extreme coordinates from legacy data)
-    const angle = Math.random() * Math.PI * 2;
-    const distance = 1000 + Math.random() * 8000; // 1000 to 9000 light years from center
-    return {
-      x: Math.cos(angle) * distance + (Math.random() - 0.5) * 500,
-      y: (Math.random() - 0.5) * 3000, // -1500 to 1500 
-      z: Math.sin(angle) * distance + (Math.random() - 0.5) * 30000 // Allow for some very distant systems
-    };
+  try {
+    const filePath = join(process.cwd(), 'src', 'data', 'systems.json');
+    const fileContents = readFileSync(filePath, 'utf8');
+    const allSystems: RawSystemData[] = JSON.parse(fileContents);
+    
+    // For performance, we'll take every 100th system to get about 1000 systems
+    // This gives us a good sampling across the galaxy while keeping performance reasonable
+    const sampledSystems = allSystems.filter((_: RawSystemData, index: number) => index % 100 === 0);
+    
+    // Transform the data to match our expected format
+    cachedSystems = sampledSystems.map((system: RawSystemData): SystemData => ({
+      id: system.id,
+      name: system.name,
+      x: system.x,
+      y: system.y,
+      z: system.z,
+      population: system.population || 0,
+      primary_economy: system.primary_economy || 'None',
+      allegiance: system.allegiance || 'None',
+      government: system.government || 'None'
+    }));
+    
+    return cachedSystems;
+  } catch (error) {
+    console.error('Error loading systems data:', error);
+    // Fallback to empty array if file cannot be read
+    return [];
   }
 }
 
-// Mock data for now - in production this would come from MongoDB
-const mockSystems = Array.from({ length: 1000 }, (_, i) => {
-  const coords = generateGalacticCoordinates();
-  return {
-    id: i,
-    name: `System ${i}`,
-    x: coords.x,
-    y: coords.y,
-    z: coords.z,
-    population: Math.floor(Math.random() * 1000000000),
-    primary_economy: ['Industrial', 'Agriculture', 'Extraction', 'Refinery', 'Service', 'Tourism', 'Military', 'High Tech'][Math.floor(Math.random() * 8)],
-    allegiance: ['Federation', 'Empire', 'Alliance', 'Independent', 'Thargoid', 'Guardian'][Math.floor(Math.random() * 6)],
-    government: ['Democracy', 'Corporate', 'Dictatorship', 'Communist', 'Feudal', 'Cooperative', 'Confederacy', 'Patronage'][Math.floor(Math.random() * 8)]
-  };
-});
-
 export async function GET() {
   try {
-    // In a real app, this would query the database
-    return NextResponse.json(mockSystems);
+    // Load systems from the actual Elite Dangerous systems.json file
+    const systems = loadSystemsData();
+    return NextResponse.json(systems);
   } catch (error) {
     console.error('Error fetching systems:', error);
     return NextResponse.json({ error: 'Failed to fetch systems' }, { status: 500 });
