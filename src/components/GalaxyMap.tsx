@@ -7,6 +7,10 @@ import { SystemInfo } from './SystemInfo';
 import { ColorSelection } from './ColorSelection';
 import { LoadingSpinner } from './LoadingSpinner';
 
+// Global WebGL context counter to prevent too many contexts
+let globalWebGLContextCount = 0;
+const MAX_WEBGL_CONTEXTS = 16; // Chrome's default limit
+
 interface System {
   id: number;
   name: string;
@@ -55,6 +59,20 @@ export function GalaxyMap() {
   const initThreeJS = useCallback(() => {
     if (!mountRef.current || isInitializedRef.current) return;
 
+    // Force cleanup any existing renderer first to prevent multiple WebGL contexts
+    if (rendererRef.current) {
+      console.log('Disposing existing WebGL renderer before creating new one');
+      try {
+        if (mountRef.current && mountRef.current.contains(rendererRef.current.domElement)) {
+          mountRef.current.removeChild(rendererRef.current.domElement);
+        }
+        rendererRef.current.dispose();
+      } catch (error) {
+        console.warn('Error disposing existing renderer:', error);
+      }
+      rendererRef.current = undefined;
+    }
+
     // Scene
     const scene = new THREE.Scene();
     sceneRef.current = scene;
@@ -78,6 +96,15 @@ export function GalaxyMap() {
     });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.sortObjects = true;
+    
+    // Track WebGL context creation
+    globalWebGLContextCount++;
+    console.log(`WebGL context created. Total contexts: ${globalWebGLContextCount}`);
+    
+    if (globalWebGLContextCount > MAX_WEBGL_CONTEXTS) {
+      console.warn(`WARNING: ${globalWebGLContextCount} WebGL contexts created. Browser limit is typically ${MAX_WEBGL_CONTEXTS}.`);
+    }
+    
     rendererRef.current = renderer;
 
     // Add WebGL context loss/restore handlers
@@ -234,6 +261,19 @@ export function GalaxyMap() {
 
   const loadSystemsIntoScene = useCallback((systemsData: System[]) => {
     if (!sceneRef.current) return;
+
+    // Remove existing particle system if it exists
+    if (particleSystemRef.current) {
+      sceneRef.current.remove(particleSystemRef.current);
+      if (particleSystemRef.current.geometry) {
+        particleSystemRef.current.geometry.dispose();
+      }
+      if (particleSystemRef.current.material) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (particleSystemRef.current.material as any).dispose();
+      }
+      particleSystemRef.current = undefined;
+    }
 
     setIsLoading(false);
 
@@ -443,6 +483,11 @@ export function GalaxyMap() {
       return;
     }
 
+    // Prevent multiple animation loops
+    if (animationIdRef.current === null) {
+      return;
+    }
+
     animationIdRef.current = requestAnimationFrame(animate);
 
     if (controlsRef.current) {
@@ -503,7 +548,12 @@ export function GalaxyMap() {
         
         // Start animation loop only after everything is ready
         if (isInitializedRef.current && !animationIdRef.current && animateRef.current) {
-          animateRef.current();
+          // Add small delay to prevent race conditions with multiple mounts
+          setTimeout(() => {
+            if (isInitializedRef.current && !animationIdRef.current && animateRef.current) {
+              animateRef.current();
+            }
+          }, 100);
         }
       } catch (error) {
         console.error('Galaxy initialization error:', error);
@@ -515,45 +565,75 @@ export function GalaxyMap() {
 
     // Cleanup
     return () => {
-      // Stop animation
+      console.log('Galaxy component cleanup starting');
+      
+      // Stop animation immediately
       if (animationIdRef.current) {
         cancelAnimationFrame(animationIdRef.current);
         animationIdRef.current = null;
       }
       
-      // Cleanup Three.js resources
-      if (rendererRef.current) {
-        if (currentMount && currentMount.contains(rendererRef.current.domElement)) {
-          currentMount.removeChild(rendererRef.current.domElement);
+      // Cleanup Three.js resources in proper order
+      try {
+        // Dispose of particle system first
+        if (particleSystemRef.current) {
+          if (sceneRef.current) {
+            sceneRef.current.remove(particleSystemRef.current);
+          }
+          if (particleSystemRef.current.geometry) {
+            particleSystemRef.current.geometry.dispose();
+          }
+          if (particleSystemRef.current.material) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (particleSystemRef.current.material as any).dispose();
+          }
+          particleSystemRef.current = undefined;
         }
         
-        // Dispose of renderer
-        rendererRef.current.dispose();
-        rendererRef.current = undefined;
-      }
-      
-      // Dispose of scene objects
-      if (sceneRef.current) {
-        sceneRef.current.clear();
-        sceneRef.current = undefined;
-      }
-      
-      // Dispose of particle system
-      if (particleSystemRef.current) {
-        if (particleSystemRef.current.geometry) {
-          particleSystemRef.current.geometry.dispose();
+        // Dispose of controls
+        if (controlsRef.current) {
+          controlsRef.current.dispose();
+          controlsRef.current = undefined;
         }
-        if (particleSystemRef.current.material) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (particleSystemRef.current.material as any).dispose();
+        
+        // Remove renderer from DOM
+        if (rendererRef.current && currentMount) {
+          try {
+            if (currentMount.contains(rendererRef.current.domElement)) {
+              currentMount.removeChild(rendererRef.current.domElement);
+            }
+          } catch (error) {
+            console.warn('Error removing renderer from DOM:', error);
+          }
         }
-        particleSystemRef.current = undefined;
-      }
-      
-      // Cleanup controls
-      if (controlsRef.current) {
-        controlsRef.current.dispose();
-        controlsRef.current = undefined;
+        
+        // Force context loss before disposing renderer
+        if (rendererRef.current) {
+          const gl = rendererRef.current.getContext();
+          if (gl && gl.getExtension && !gl.isContextLost()) {
+            const loseContext = gl.getExtension('WEBGL_lose_context');
+            if (loseContext) {
+              loseContext.loseContext();
+            }
+          }
+          
+          // Dispose of renderer
+          rendererRef.current.dispose();
+          rendererRef.current = undefined;
+          
+          // Decrement global context counter
+          globalWebGLContextCount = Math.max(0, globalWebGLContextCount - 1);
+          console.log(`WebGL context disposed. Remaining contexts: ${globalWebGLContextCount}`);
+        }
+        
+        // Clear scene
+        if (sceneRef.current) {
+          sceneRef.current.clear();
+          sceneRef.current = undefined;
+        }
+        
+      } catch (error) {
+        console.warn('Error during Three.js cleanup:', error);
       }
       
       // Call resize cleanup
@@ -563,6 +643,8 @@ export function GalaxyMap() {
       
       // Reset initialization flag
       isInitializedRef.current = false;
+      
+      console.log('Galaxy component cleanup completed');
     };
   }, [initThreeJS, loadSystemsData, setupEventListeners]); // Added dependencies to fix React hooks warning
 
