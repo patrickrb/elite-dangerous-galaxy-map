@@ -220,7 +220,7 @@ export function GalaxyMap() {
     const material = new THREE.ShaderMaterial({
       uniforms: {
         pointTexture: { value: texture },
-        scale: { value: 300.0 }
+        scale: { value: 10.0 }
       },
       vertexShader: `
         attribute float size;
