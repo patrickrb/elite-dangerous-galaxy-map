@@ -55,14 +55,14 @@ export function GalaxyMap() {
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    // Camera
+    // Camera - updated for larger galactic scale
     const camera = new THREE.PerspectiveCamera(
       90,
       window.innerWidth / window.innerHeight,
       1,
-      999000
+      1000000  // Increased far plane for larger galaxy
     );
-    camera.position.set(0, 50, 50);
+    camera.position.set(0, 200, 200); // Start further back to see more systems
     cameraRef.current = camera;
 
     // Renderer with context loss protection
@@ -140,11 +140,12 @@ export function GalaxyMap() {
     const controls = new OrbitControls(cameraRef.current, rendererRef.current.domElement);
     controls.rotateSpeed = 0.3;
     controls.zoomSpeed = 2.2;
-    controls.panSpeed = 2;
+    controls.panSpeed = 4;  // Increased for larger scale
     controls.enableDamping = true;
     controls.dampingFactor = 0.3;
     controls.keys = { LEFT: 'KeyA', UP: 'KeyS', RIGHT: 'KeyD', BOTTOM: 'KeyW' };
-    controls.minDistance = 5;
+    controls.minDistance = 10;  // Updated for larger scale
+    controls.maxDistance = 50000; // Allow zooming out to see the full galaxy
 
     controlsRef.current = controls;
   };
@@ -178,15 +179,46 @@ export function GalaxyMap() {
     sceneRef.current.add(sprite);
   };
 
+  // Generate realistic galactic coordinates similar to Elite Dangerous galaxy
+  const generateGalacticCoordinates = useCallback(() => {
+    const random = Math.random();
+    
+    if (random < 0.6) {
+      // 60% of systems in the core bubble (similar to inhabited space in Elite)
+      return {
+        x: (Math.random() - 0.5) * 400 + (Math.random() - 0.5) * 50, // -225 to 225 with center bias
+        y: (Math.random() - 0.5) * 200 + (Math.random() - 0.5) * 30, // -115 to 115 with center bias  
+        z: (Math.random() - 0.5) * 300 + (Math.random() - 0.5) * 40  // -170 to 170 with center bias
+      };
+    } else if (random < 0.85) {
+      // 25% in the extended region (further from center)
+      return {
+        x: (Math.random() - 0.5) * 2000,  // -1000 to 1000
+        y: (Math.random() - 0.5) * 1000,  // -500 to 500
+        z: (Math.random() - 0.5) * 1500   // -750 to 750
+      };
+    } else {
+      // 15% in the far reaches (matching some of the extreme coordinates from legacy data)
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 1000 + Math.random() * 8000; // 1000 to 9000 light years from center
+      return {
+        x: Math.cos(angle) * distance + (Math.random() - 0.5) * 500,
+        y: (Math.random() - 0.5) * 3000, // -1500 to 1500 
+        z: Math.sin(angle) * distance + (Math.random() - 0.5) * 30000 // Allow for some very distant systems
+      };
+    }
+  }, []);
+
   const createTestSystems = useCallback((): System[] => {
     const systems: System[] = [];
     for (let i = 0; i < 1000; i++) {
+      const coords = generateGalacticCoordinates();
       systems.push({
         id: i,
         name: `System ${i}`,
-        x: (Math.random() - 0.5) * 100,
-        y: (Math.random() - 0.5) * 100,
-        z: (Math.random() - 0.5) * 100,
+        x: coords.x,
+        y: coords.y,
+        z: coords.z,
         population: Math.random() * 1000000000,
         primary_economy: colorService.mapEconomy[Math.floor(Math.random() * colorService.mapEconomy.length)],
         allegiance: colorService.mapAllegiance[Math.floor(Math.random() * colorService.mapAllegiance.length)],
@@ -194,7 +226,7 @@ export function GalaxyMap() {
       });
     }
     return systems;
-  }, [colorService]);
+  }, [colorService, generateGalacticCoordinates]);
 
   const loadSystemsIntoScene = useCallback((systemsData: System[]) => {
     if (!sceneRef.current) return;
@@ -216,21 +248,22 @@ export function GalaxyMap() {
 
     const texture = new THREE.CanvasTexture(canvas);
 
-    // Create shader material
+    // Create shader material - updated scale for larger galaxy
     const material = new THREE.ShaderMaterial({
       uniforms: {
         pointTexture: { value: texture },
-        scale: { value: 1.0 }
+        scale: { value: 100.0 }  // Increased scale factor for larger coordinate system
       },
       vertexShader: `
         attribute float size;
         attribute vec3 customColor;
+        uniform float scale;
         varying vec3 vColor;
         
         void main() {
           vColor = customColor;
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = size * (300.0 / -mvPosition.z);
+          gl_PointSize = min(size * (scale / length(mvPosition.xyz)), 40.0);
           gl_Position = projectionMatrix * mvPosition;
         }
       `,
@@ -270,10 +303,16 @@ export function GalaxyMap() {
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;
 
-      // Size based on population
-      const baseSize = 2;
-      const popScale = system.population ? Math.max(system.population / 100000000, 1) : 1;
-      sizes[i] = baseSize * popScale;
+      // Size based on population - using legacy formula
+      const BASE_POINT_SIZE = 100;
+      const POP_SIZE_THRESHOLD = 1000000000; // 1 billion
+      let size;
+      if (system.population) {
+        size = 50 * Math.max(system.population / POP_SIZE_THRESHOLD, 1.0);
+      } else {
+        size = BASE_POINT_SIZE;
+      }
+      sizes[i] = size;
     }
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
