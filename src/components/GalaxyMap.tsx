@@ -32,6 +32,7 @@ export function GalaxyMap() {
   const animationIdRef = useRef<number | null>(null);
   const isInitializedRef = useRef(false);
   const animateRef = useRef<(() => void) | null>(null);
+  const flyToSystemAnimationRef = useRef<number | null>(null);
 
   const [systems, setSystems] = useState<System[]>([]);
   const [selectedSystem, setSelectedSystem] = useState<System | null>(null);
@@ -441,12 +442,17 @@ export function GalaxyMap() {
       console.log('Mouse move:', mouse.current.x, mouse.current.y);
     };
 
-    const handleMouseClick = () => {
+    const handleMouseClick = (event: MouseEvent) => {
       console.log('Mouse click detected');
       if (!particleSystemRef.current || !cameraRef.current || !raycasterRef.current) {
         console.log('Missing refs for raycasting');
         return;
       }
+
+      // Update mouse coordinates directly in click handler to avoid conflicts with OrbitControls
+      mouse.current.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      console.log('Updated mouse coords for click:', mouse.current.x, mouse.current.y);
 
       console.log('Performing raycast with mouse:', mouse.current.x, mouse.current.y);
       raycasterRef.current.setFromCamera(mouse.current, cameraRef.current);
@@ -459,6 +465,7 @@ export function GalaxyMap() {
         const systemIndex = intersect.index;
         if (systemIndex !== undefined && systemIndex >= 0 && systemIndex < systems.length && systems[systemIndex]) {
           const system = systems[systemIndex];
+          console.log('Selected system:', system.name, 'at index:', systemIndex);
           setSelectedSystem(system);
           setSystemInfoHidden(false);
           setTargetPosition(system);
@@ -504,25 +511,45 @@ export function GalaxyMap() {
   const flyToSystem = (system: System) => {
     if (!cameraRef.current || !controlsRef.current || !selectedSystemIconRef.current) return;
 
+    // Cancel any existing fly-to animation
+    if (flyToSystemAnimationRef.current) {
+      cancelAnimationFrame(flyToSystemAnimationRef.current);
+      flyToSystemAnimationRef.current = null;
+    }
+
     // Position the icon
     selectedSystemIconRef.current.position.set(system.x, system.y + 0.75, system.z);
     selectedSystemIconRef.current.visible = true;
 
-    // Animate camera to system
-    const targetPosition = new THREE.Vector3(system.x, system.y, system.z + 5);
+    // Animate camera to system with a shorter, less intrusive animation
+    const startPosition = cameraRef.current.position.clone();
+    const startTarget = controlsRef.current.target.clone();
+    const targetPosition = new THREE.Vector3(system.x, system.y, system.z + 100); // Further back to avoid being too close
     const targetLookAt = new THREE.Vector3(system.x, system.y, system.z);
 
-    // Simple animation (could be enhanced with TWEEN.js)
+    let animationProgress = 0;
+    const animationDuration = 60; // 60 frames = ~1 second at 60fps
+
     const animateCamera = () => {
-      cameraRef.current!.position.lerp(targetPosition, 0.05);
-      controlsRef.current!.target.lerp(targetLookAt, 0.05);
+      animationProgress++;
+      const t = Math.min(animationProgress / animationDuration, 1);
       
-      if (cameraRef.current!.position.distanceTo(targetPosition) > 0.1) {
-        requestAnimationFrame(animateCamera);
+      // Use easing for smoother animation
+      const easedT = t * t * (3 - 2 * t); // Smoothstep easing
+      
+      cameraRef.current!.position.lerpVectors(startPosition, targetPosition, easedT);
+      controlsRef.current!.target.lerpVectors(startTarget, targetLookAt, easedT);
+      
+      if (t < 1) {
+        flyToSystemAnimationRef.current = requestAnimationFrame(animateCamera);
+      } else {
+        flyToSystemAnimationRef.current = null;
+        // Ensure controls are updated after animation completes
+        controlsRef.current!.update();
       }
     };
     
-    animateCamera();
+    flyToSystemAnimationRef.current = requestAnimationFrame(animateCamera);
   };
 
   const animate = useCallback(() => {
@@ -622,6 +649,12 @@ export function GalaxyMap() {
       if (animationIdRef.current) {
         cancelAnimationFrame(animationIdRef.current);
         animationIdRef.current = null;
+      }
+      
+      // Stop fly-to animation
+      if (flyToSystemAnimationRef.current) {
+        cancelAnimationFrame(flyToSystemAnimationRef.current);
+        flyToSystemAnimationRef.current = null;
       }
       
       // Cleanup Three.js resources
