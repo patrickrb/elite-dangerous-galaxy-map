@@ -27,10 +27,12 @@ export function GalaxyMap() {
   const controlsRef = useRef<OrbitControls | undefined>(undefined);
   const particleSystemRef = useRef<THREE.Points | undefined>(undefined);
   const selectedSystemIconRef = useRef<THREE.Sprite | undefined>(undefined);
+  const targetCircleRef = useRef<THREE.Object3D | undefined>(undefined);
   const raycasterRef = useRef<THREE.Raycaster | undefined>(undefined);
   const animationIdRef = useRef<number | null>(null);
   const isInitializedRef = useRef(false);
   const animateRef = useRef<(() => void) | null>(null);
+  const flyToSystemAnimationRef = useRef<number | null>(null);
 
   const [systems, setSystems] = useState<System[]>([]);
   const [selectedSystem, setSelectedSystem] = useState<System | null>(null);
@@ -108,10 +110,13 @@ export function GalaxyMap() {
     // Raycaster for mouse picking
     raycasterRef.current = new THREE.Raycaster();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (raycasterRef.current.params as any).Points = { threshold: 0.5 };
+    (raycasterRef.current.params as any).Points = { threshold: 50.0 }; // Increased threshold for better picking
 
     // Add selected system icon
     addSelectedSystemIcon();
+
+    // Add target circle
+    addTargetCircle();
 
     // Add controls
     addControls();
@@ -181,6 +186,31 @@ export function GalaxyMap() {
     
     selectedSystemIconRef.current = sprite;
     sceneRef.current.add(sprite);
+  };
+
+  const addTargetCircle = () => {
+    if (!sceneRef.current) return;
+
+    // Create target circle similar to legacy implementation
+    const targetCircle = new THREE.Object3D();
+    const targetCircleGeo = new THREE.CircleGeometry(50, 64);
+    const targetLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+    
+    // Remove center vertex to create a ring (like legacy)
+    const positions = targetCircleGeo.attributes.position.array as Float32Array;
+    const newPositions = new Float32Array(positions.length - 3); // Remove first vertex (center)
+    newPositions.set(positions.slice(3));
+    
+    const ringGeometry = new THREE.BufferGeometry();
+    ringGeometry.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
+    
+    const ring = new THREE.Line(ringGeometry, targetLineMaterial);
+    targetCircle.add(ring);
+    targetCircle.visible = false;
+    targetCircle.name = 'targetCircle';
+    
+    targetCircleRef.current = targetCircle;
+    sceneRef.current.add(targetCircle);
   };
 
   // Generate realistic galactic coordinates similar to Elite Dangerous galaxy
@@ -395,56 +425,131 @@ export function GalaxyMap() {
   }, [systems, colorService]);
 
   const setupEventListeners = useCallback(() => {
-    if (!mountRef.current) return;
+    console.log('setupEventListeners called');
+    if (!mountRef.current || !rendererRef.current) {
+      console.log('Missing mountRef or rendererRef');
+      return;
+    }
+    
+    // Get the canvas element to attach mouse events to
+    const canvas = rendererRef.current.domElement;
+    console.log('Canvas found:', !!canvas);
 
-    const handleMouseMove = () => {
-      // Mouse move logic could be added here
+    const handleMouseMove = (event: MouseEvent) => {
+      // Update mouse coordinates for raycasting (same as legacy implementation)
+      mouse.current.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      console.log('Mouse move:', mouse.current.x, mouse.current.y);
     };
 
-    const handleMouseClick = () => {
-      if (!particleSystemRef.current || !cameraRef.current || !raycasterRef.current) return;
+    const handleMouseClick = (event: MouseEvent) => {
+      console.log('Mouse click detected');
+      if (!particleSystemRef.current || !cameraRef.current || !raycasterRef.current) {
+        console.log('Missing refs for raycasting');
+        return;
+      }
 
+      // Update mouse coordinates directly in click handler to avoid conflicts with OrbitControls
+      mouse.current.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.current.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      console.log('Updated mouse coords for click:', mouse.current.x, mouse.current.y);
+
+      console.log('Performing raycast with mouse:', mouse.current.x, mouse.current.y);
       raycasterRef.current.setFromCamera(mouse.current, cameraRef.current);
       const intersects = raycasterRef.current.intersectObject(particleSystemRef.current);
+      console.log('Intersects found:', intersects.length);
+      console.log('Total systems loaded:', systems.length);
 
       if (intersects.length > 0) {
         const intersect = intersects[0];
         const systemIndex = intersect.index;
-        if (systemIndex !== undefined && systems[systemIndex]) {
+        if (systemIndex !== undefined && systemIndex >= 0 && systemIndex < systems.length && systems[systemIndex]) {
           const system = systems[systemIndex];
+          console.log('Selected system:', system.name, 'at index:', systemIndex);
           setSelectedSystem(system);
           setSystemInfoHidden(false);
+          setTargetPosition(system);
           flyToSystem(system);
         }
       }
     };
 
-    mountRef.current.addEventListener('mousemove', handleMouseMove);
-    mountRef.current.addEventListener('click', handleMouseClick);
+    console.log('Adding event listeners to canvas');
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('click', handleMouseClick);
+    
+    // Return cleanup function
+    return () => {
+      console.log('Cleaning up event listeners');
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('click', handleMouseClick);
+    };
   }, [systems]);
+
+  const setTargetPosition = (system: System) => {
+    console.log('setTargetPosition called for system:', system.name);
+    if (!targetCircleRef.current || !cameraRef.current) {
+      console.log('Missing targetCircleRef or cameraRef');
+      return;
+    }
+
+    // Make target circle visible and position it at the system
+    targetCircleRef.current.visible = true;
+    targetCircleRef.current.position.set(system.x, system.y, system.z);
+    targetCircleRef.current.lookAt(cameraRef.current.position);
+    
+    // Scale based on population like legacy implementation  
+    const POP_SIZE_THRESHOLD = 1000000000;
+    let popScale = 1.0;
+    if (system.population) {
+      popScale = Math.max(system.population / POP_SIZE_THRESHOLD, 1.0);
+    }
+    targetCircleRef.current.scale.set(popScale, popScale, popScale);
+    console.log('Target circle positioned and made visible');
+  };
 
   const flyToSystem = (system: System) => {
     if (!cameraRef.current || !controlsRef.current || !selectedSystemIconRef.current) return;
+
+    // Cancel any existing fly-to animation
+    if (flyToSystemAnimationRef.current) {
+      cancelAnimationFrame(flyToSystemAnimationRef.current);
+      flyToSystemAnimationRef.current = null;
+    }
 
     // Position the icon
     selectedSystemIconRef.current.position.set(system.x, system.y + 0.75, system.z);
     selectedSystemIconRef.current.visible = true;
 
-    // Animate camera to system
-    const targetPosition = new THREE.Vector3(system.x, system.y, system.z + 5);
+    // Animate camera to system with a shorter, less intrusive animation
+    const startPosition = cameraRef.current.position.clone();
+    const startTarget = controlsRef.current.target.clone();
+    const targetPosition = new THREE.Vector3(system.x, system.y, system.z + 100); // Further back to avoid being too close
     const targetLookAt = new THREE.Vector3(system.x, system.y, system.z);
 
-    // Simple animation (could be enhanced with TWEEN.js)
+    let animationProgress = 0;
+    const animationDuration = 60; // 60 frames = ~1 second at 60fps
+
     const animateCamera = () => {
-      cameraRef.current!.position.lerp(targetPosition, 0.05);
-      controlsRef.current!.target.lerp(targetLookAt, 0.05);
+      animationProgress++;
+      const t = Math.min(animationProgress / animationDuration, 1);
       
-      if (cameraRef.current!.position.distanceTo(targetPosition) > 0.1) {
-        requestAnimationFrame(animateCamera);
+      // Use easing for smoother animation
+      const easedT = t * t * (3 - 2 * t); // Smoothstep easing
+      
+      cameraRef.current!.position.lerpVectors(startPosition, targetPosition, easedT);
+      controlsRef.current!.target.lerpVectors(startTarget, targetLookAt, easedT);
+      
+      if (t < 1) {
+        flyToSystemAnimationRef.current = requestAnimationFrame(animateCamera);
+      } else {
+        flyToSystemAnimationRef.current = null;
+        // Ensure controls are updated after animation completes
+        controlsRef.current!.update();
       }
     };
     
-    animateCamera();
+    flyToSystemAnimationRef.current = requestAnimationFrame(animateCamera);
   };
 
   const animate = useCallback(() => {
@@ -523,9 +628,6 @@ export function GalaxyMap() {
           loadSystemsIntoScene(testSystems);
         }
 
-        // Setup event listeners
-        setupEventListeners();
-
         // Wait another frame before starting animation
         await new Promise(resolve => requestAnimationFrame(resolve));
         
@@ -549,6 +651,12 @@ export function GalaxyMap() {
         animationIdRef.current = null;
       }
       
+      // Stop fly-to animation
+      if (flyToSystemAnimationRef.current) {
+        cancelAnimationFrame(flyToSystemAnimationRef.current);
+        flyToSystemAnimationRef.current = null;
+      }
+      
       // Cleanup Three.js resources
       if (rendererRef.current) {
         if (currentMount && currentMount.contains(rendererRef.current.domElement)) {
@@ -558,6 +666,12 @@ export function GalaxyMap() {
         // Dispose of renderer
         rendererRef.current.dispose();
         rendererRef.current = undefined;
+      }
+      
+      // Cleanup target circle before disposing scene
+      if (targetCircleRef.current && sceneRef.current) {
+        sceneRef.current.remove(targetCircleRef.current);
+        targetCircleRef.current = undefined;
       }
       
       // Dispose of scene objects
@@ -584,7 +698,7 @@ export function GalaxyMap() {
         controlsRef.current = undefined;
       }
       
-      // Call resize cleanup
+      // Call cleanup functions
       if (cleanupResize) {
         cleanupResize();
       }
@@ -593,6 +707,14 @@ export function GalaxyMap() {
       isInitializedRef.current = false;
     };
   }, []); // Remove problematic dependencies to stop re-initialization loop
+
+  // Separate effect to handle event listeners when systems change
+  useEffect(() => {
+    if (systems.length > 0 && rendererRef.current) {
+      const cleanup = setupEventListeners();
+      return cleanup;
+    }
+  }, [systems, setupEventListeners]);
 
   return (
     <div className="relative w-full h-full">
